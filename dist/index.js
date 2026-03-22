@@ -134,6 +134,38 @@ function filterResponse(data) {
     }
     return data;
 }
+/** Slim down brief listings to summary-only fields */
+function summarizeBasicBriefs(data) {
+    if (!Array.isArray(data))
+        return data;
+    return data.map((item) => ({
+        id: item.id,
+        keyword: item.keyword,
+        location: item.location,
+        language: item.language,
+        score: item.score,
+        associated_url: item.associated_url,
+        project_id: item.project_id,
+        timestamp: item.timestamp,
+    }));
+}
+function summarizeAdvancedBriefs(data) {
+    if (!Array.isArray(data))
+        return data;
+    return data.map((item) => ({
+        id: item.id,
+        keyword: item.keyword,
+        location: item.location,
+        language: item.language,
+        page_type: item.page_type,
+        provider: item.provider,
+        project_id: item.project_id,
+        created_at: item.created_at,
+        has_plan: item.has_plan,
+        intention_score: item.intention_score,
+        theme_score: item.theme_score,
+    }));
+}
 async function callAPI(endpoint, payload, method = "POST", authMode = "body") {
     if (!API_KEY) {
         return errorResponse("SEMRANK_API_KEY is not set. Please set your Semrank API key.");
@@ -238,7 +270,18 @@ server.tool("list_basic_briefs", "List the user's basic brief history. Returns k
     const params = { limit, offset };
     if (project_id)
         params.project_id = project_id;
-    return callAPI("/api/user-queries", params, "GET", "bearer");
+    const result = await callAPI("/api/user-queries", params, "GET", "bearer");
+    if (result.isError)
+        return result;
+    // Re-parse the response to apply summary filter
+    try {
+        const parsed = JSON.parse(result.content[0].text);
+        const summary = summarizeBasicBriefs(parsed);
+        return formatResponse(summary);
+    }
+    catch {
+        return result;
+    }
 });
 // ─── Tool: generate_advanced_brief ───────────────────────────────────────────
 server.tool("generate_advanced_brief", "Generate an advanced AI-powered SEO brief (synchronous). Richer than basic briefs with deeper analysis. Costs 2 credits (cached = free).", {
@@ -301,7 +344,17 @@ server.tool("list_advanced_briefs", "List all advanced briefs for the user. Retu
     const params = {};
     if (project_id)
         params.project_id = project_id;
-    return callAPI("/api/brief-advanced/list", params, "GET", "body");
+    const result = await callAPI("/api/brief-advanced/list", params, "GET", "body");
+    if (result.isError)
+        return result;
+    try {
+        const parsed = JSON.parse(result.content[0].text);
+        const summary = summarizeAdvancedBriefs(parsed);
+        return formatResponse(summary);
+    }
+    catch {
+        return result;
+    }
 });
 // ─── Tool: analyze_coverage ──────────────────────────────────────────────────
 server.tool("analyze_coverage", "Analyze the semantic coverage of a text against a list of topics/elements. Checks which SEO topics are present in the content (including synonyms). Great for verifying content completeness.", {

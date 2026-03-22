@@ -160,6 +160,38 @@ function filterResponse(data: unknown): unknown {
   return data;
 }
 
+/** Slim down brief listings to summary-only fields */
+function summarizeBasicBriefs(data: unknown): unknown {
+  if (!Array.isArray(data)) return data;
+  return data.map((item: Record<string, unknown>) => ({
+    id: item.id,
+    keyword: item.keyword,
+    location: item.location,
+    language: item.language,
+    score: item.score,
+    associated_url: item.associated_url,
+    project_id: item.project_id,
+    timestamp: item.timestamp,
+  }));
+}
+
+function summarizeAdvancedBriefs(data: unknown): unknown {
+  if (!Array.isArray(data)) return data;
+  return data.map((item: Record<string, unknown>) => ({
+    id: item.id,
+    keyword: item.keyword,
+    location: item.location,
+    language: item.language,
+    page_type: item.page_type,
+    provider: item.provider,
+    project_id: item.project_id,
+    created_at: item.created_at,
+    has_plan: item.has_plan,
+    intention_score: item.intention_score,
+    theme_score: item.theme_score,
+  }));
+}
+
 async function callAPI(
   endpoint: string,
   payload: Record<string, unknown> | null,
@@ -309,7 +341,16 @@ server.tool(
   async ({ project_id, limit, offset }) => {
     const params: Record<string, unknown> = { limit, offset };
     if (project_id) params.project_id = project_id;
-    return callAPI("/api/user-queries", params, "GET", "bearer");
+    const result = await callAPI("/api/user-queries", params, "GET", "bearer");
+    if (result.isError) return result;
+    // Re-parse the response to apply summary filter
+    try {
+      const parsed = JSON.parse(result.content[0].text);
+      const summary = summarizeBasicBriefs(parsed);
+      return formatResponse(summary);
+    } catch {
+      return result;
+    }
   }
 );
 
@@ -391,7 +432,15 @@ server.tool(
   async ({ project_id }) => {
     const params: Record<string, unknown> = {};
     if (project_id) params.project_id = project_id;
-    return callAPI("/api/brief-advanced/list", params, "GET", "body");
+    const result = await callAPI("/api/brief-advanced/list", params, "GET", "body");
+    if (result.isError) return result;
+    try {
+      const parsed = JSON.parse(result.content[0].text);
+      const summary = summarizeAdvancedBriefs(parsed);
+      return formatResponse(summary);
+    } catch {
+      return result;
+    }
   }
 );
 
