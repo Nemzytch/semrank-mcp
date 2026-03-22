@@ -71,6 +71,13 @@ const TOOL_CATALOG: ToolInfo[] = [
     when_to_use: "Before generating briefs, or when the user wants to know how many credits they have left",
     returns: "{ credits }",
   },
+  {
+    name: "get_competitor_content",
+    category: "brief",
+    summary: "Get the full scraped content of a competitor page from a basic brief",
+    when_to_use: "When you need to read the actual content, headings, or structure of a specific competitor page from the SERP results of a previously generated brief",
+    returns: "{ position, title, link, domain, content, headings, word_count }",
+  },
 ];
 
 // ─── Server Instructions ─────────────────────────────────────────────────────
@@ -173,6 +180,33 @@ function summarizeBasicBriefs(data: unknown): unknown {
     project_id: item.project_id,
     timestamp: item.timestamp,
   }));
+}
+
+/** Strip heavy fields from a basic brief response, keep only actionable SEO data */
+function slimBriefResponse(data: unknown): unknown {
+  if (!data || typeof data !== "object") return data;
+  const obj = data as Record<string, unknown>;
+
+  // Slim down organic results: strip full page content and headings
+  if (obj.content_brief && typeof obj.content_brief === "object") {
+    const brief = obj.content_brief as Record<string, unknown>;
+    if (Array.isArray(brief.organic)) {
+      brief.organic = brief.organic.map((r: Record<string, unknown>) => ({
+        position: r.position,
+        title: r.title,
+        link: r.link,
+        domain: r.domain,
+        snippet: r.snippet,
+        word_count: r.word_count,
+        pageRank: r.pageRank,
+      }));
+    }
+  }
+
+  // Remove sources (raw scraped data)
+  delete obj.sources;
+
+  return obj;
 }
 
 function summarizeAdvancedBriefs(data: unknown): unknown {
@@ -310,12 +344,19 @@ server.tool(
       .describe("Language code (e.g. fr, en, de, es, it, pt)"),
   },
   async ({ keyword, location, language }) => {
-    return callAPI(
+    const result = await callAPI(
       "/api/brief",
       { keyword, location, language },
       "POST",
       "bearer"
     );
+    if (result.isError) return result;
+    try {
+      const parsed = JSON.parse(result.content[0].text);
+      return formatResponse(slimBriefResponse(parsed));
+    } catch {
+      return result;
+    }
   }
 );
 
@@ -438,6 +479,71 @@ server.tool(
       const parsed = JSON.parse(result.content[0].text);
       const summary = summarizeAdvancedBriefs(parsed);
       return formatResponse(summary);
+    } catch {
+      return result;
+    }
+  }
+);
+
+// ─── Tool: get_competitor_content ─────────────────────────────────────────────
+
+server.tool(
+  "get_competitor_content",
+  "Get the full scraped content and headings of a specific competitor page from a basic brief. Re-fetches the brief (cached = free) and extracts the requested competitor. Use after generate_brief to dive into a specific SERP result.",
+  {
+    keyword: z.string().describe("The keyword of the brief (same as used in generate_brief)"),
+    location: z.string().default("FR").describe("Country code used for the brief"),
+    language: z.string().default("fr").describe("Language code used for the brief"),
+    position: z
+      .number()
+      .optional()
+      .describe("SERP position of the competitor to retrieve (1-10). If omitted, returns all competitors."),
+    domain: z
+      .string()
+      .optional()
+      .describe("Domain of the competitor to retrieve (e.g. 'example.com'). Alternative to position."),
+  },
+  async ({ keyword, location, language, position, domain }) => {
+    const result = await callAPI(
+      "/api/brief",
+      { keyword, location, language },
+      "POST",
+      "bearer"
+    );
+    if (result.isError) return result;
+    try {
+      const parsed = JSON.parse(result.content[0].text) as Record<string, unknown>;
+      const brief = parsed.content_brief as Record<string, unknown>;
+      const organic = brief?.organic as Array<Record<string, unknown>>;
+      if (!organic) return errorResponse("No organic results found in brief");
+
+      let competitors: Array<Record<string, unknown>>;
+      if (position !== undefined) {
+        competitors = organic.filter((r) => r.position === position);
+      } else if (domain) {
+        competitors = organic.filter((r) => String(r.domain).includes(domain));
+      } else {
+        competitors = organic;
+      }
+
+      if (competitors.length === 0) {
+        return errorResponse(`No competitor found for ${position ? `position ${position}` : `domain "${domain}"`}`);
+      }
+
+      // Return full data including content and headings
+      const detailed = competitors.map((r) => ({
+        position: r.position,
+        title: r.title,
+        link: r.link,
+        domain: r.domain,
+        snippet: r.snippet,
+        word_count: r.word_count,
+        pageRank: r.pageRank,
+        content: r.content,
+        headings: r.headings,
+      }));
+
+      return formatResponse(detailed);
     } catch {
       return result;
     }
