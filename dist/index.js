@@ -157,6 +157,10 @@ async function callAPI(endpoint, payload, method = "POST", authMode = "body") {
                 }
             }
         }
+        // For GET requests with body auth, inject user_id as query param
+        if (authMode === "body") {
+            url.searchParams.set("user_id", API_KEY);
+        }
     }
     else {
         const bodyPayload = authMode === "body" && payload
