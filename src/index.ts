@@ -724,18 +724,23 @@ server.tool(
       return errorResponse(`Failed to fetch URL content: ${(err as Error).message}`);
     }
 
-    // Step 2: Get brief keywords (cached = free)
-    const briefResult = await callAPI(
-      "/api/brief",
-      { keyword, location, language },
-      "POST",
-      "bearer"
-    );
-    if (briefResult.isError) return briefResult;
-
+    // Step 2: Get brief keywords (cached = free) - direct fetch to get raw JSON
     let keywords: Record<string, string[]>;
     try {
-      const briefData = JSON.parse(briefResult.content[0].text) as Record<string, unknown>;
+      const briefUrl = new URL("/api/brief", API_BASE);
+      const briefResponse = await fetch(briefUrl.toString(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${API_KEY}`,
+        },
+        body: JSON.stringify({ keyword, location, language }),
+      });
+      if (!briefResponse.ok) {
+        const text = await briefResponse.text();
+        return errorResponse(`Failed to get brief: HTTP ${briefResponse.status}: ${text}`);
+      }
+      const briefData = await briefResponse.json() as Record<string, unknown>;
       const contentBrief = briefData.content_brief as Record<string, unknown>;
       const kw = contentBrief?.keywords as Record<string, string[]>;
       keywords = {
@@ -743,8 +748,8 @@ server.tool(
         interesting: kw?.interesting_keywords || [],
         bonus: kw?.bonus_keywords || [],
       };
-    } catch {
-      return errorResponse("Failed to parse brief keywords");
+    } catch (err) {
+      return errorResponse(`Failed to parse brief keywords: ${(err as Error).message}`);
     }
 
     // Step 3: Run AI analysis via /api/ai-analyze
