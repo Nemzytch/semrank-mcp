@@ -105,17 +105,27 @@ You are connected to the Semrank SEO platform via MCP. Semrank generates AI-powe
 - **semantic**: Content coverage and optimization analysis
 - **utility**: Credits and account management
 
+## IMPORTANT: Always Check for Existing Briefs First
+Before generating ANY brief (basic or advanced), ALWAYS search for existing briefs first:
+1. Use list_basic_briefs or list_advanced_briefs to check if a brief already exists for the requested keyword
+2. If a matching brief exists, use it directly (get_advanced_brief to read the full content) instead of generating a new one
+3. Only generate a new brief if no existing brief matches the keyword, location, and language
+4. If an existing brief is found, tell the user and ask if they want to use it or generate a fresh one
+This saves credits and avoids duplicates.
+
 ## Workflows
 
 ### Quick SEO Brief
-1. Use check_credits to verify the user has credits
-2. Use generate_brief with keyword, location (country code), and language
-3. The brief includes: target keywords (must-have, interesting, bonus), questions to answer, content structure, SERP competitors, related searches, People Also Ask
+1. FIRST: Use list_basic_briefs to check if a brief already exists for this keyword
+2. If not found, use check_credits to verify the user has credits
+3. Use generate_brief with keyword, location (country code), and language
+4. The brief includes: target keywords (must-have, interesting, bonus), questions to answer, content structure, SERP competitors, related searches, People Also Ask
 
 ### Advanced Brief Generation
-1. Use check_credits first (costs 2 credits, free if cached)
-2. Use generate_advanced_brief with keyword + options (page_type, provider, generation_mode)
-3. The advanced brief includes deeper AI analysis, theme coverage, and structured content plan
+1. FIRST: Use list_advanced_briefs to check if a brief already exists for this keyword
+2. If not found, use check_credits (costs 2 credits, free if cached)
+3. Use generate_advanced_brief with keyword + options (page_type, provider, generation_mode)
+4. The advanced brief includes deeper AI analysis, theme coverage, and structured content plan
 
 ### Content Semantic Check (Ad-hoc)
 1. Use analyze_coverage with your text content and a list of topics/keywords to verify
