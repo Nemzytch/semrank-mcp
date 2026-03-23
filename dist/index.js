@@ -46,9 +46,23 @@ const TOOL_CATALOG = [
     {
         name: "analyze_coverage",
         category: "semantic",
-        summary: "Analyze semantic coverage of a text against a list of topics/elements",
-        when_to_use: "When you want to check which SEO topics/keywords are covered in a piece of content. Provide the text and a list of elements to verify",
+        summary: "Analyze semantic coverage of ad-hoc text against a list of topics/elements",
+        when_to_use: "When you want to check which SEO topics/keywords are covered in an arbitrary piece of text (not tied to a brief). Provide the text and a list of elements to verify. For brief-based analysis, use run_coverage instead.",
         returns: "{ covered: [{ element }], total }",
+    },
+    {
+        name: "import_content",
+        category: "advanced_brief",
+        summary: "Import content from a URL into an advanced brief's editor",
+        when_to_use: "When you need to import/fetch a web page's content into an advanced brief for coverage analysis. The brief must exist first (use generate_advanced_brief).",
+        returns: "{ success, word_count, headings_count }",
+    },
+    {
+        name: "run_coverage",
+        category: "semantic",
+        summary: "Run semantic coverage analysis on an advanced brief's imported content",
+        when_to_use: "When you want to analyze how well the content imported into an advanced brief covers the brief's theme elements. The brief must have content imported first (use import_content). For ad-hoc text analysis, use analyze_coverage instead.",
+        returns: "Coverage results with theme element analysis",
     },
     {
         name: "check_credits",
@@ -87,10 +101,17 @@ You are connected to the Semrank SEO platform via MCP. Semrank generates AI-powe
 2. Use generate_advanced_brief with keyword + options (page_type, provider, generation_mode)
 3. The advanced brief includes deeper AI analysis, theme coverage, and structured content plan
 
-### Content Semantic Check
+### Content Semantic Check (Ad-hoc)
 1. Use analyze_coverage with your text content and a list of topics/keywords to verify
 2. Returns which elements are covered in the text (even via synonyms)
-3. Great for checking if an article covers all required SEO topics from a brief
+3. Great for checking if an arbitrary piece of text covers specific SEO topics
+
+### Content Optimization (Brief-based)
+1. Generate an advanced brief first with generate_advanced_brief
+2. Use import_content to fetch a URL's content into the brief's editor
+3. Use run_coverage to analyze how well the imported content covers the brief's theme elements
+4. This mirrors the frontend workflow: create brief -> import content -> run coverage analysis
+5. Use this flow when optimizing an existing page against an advanced brief
 
 ### Browse Past Briefs
 - Use list_basic_briefs to see basic brief history
@@ -451,13 +472,62 @@ server.tool("get_competitor_content", "Get the full scraped content and headings
     }
 });
 // ─── Tool: analyze_coverage ──────────────────────────────────────────────────
-server.tool("analyze_coverage", "Analyze the semantic coverage of a text against a list of topics/elements. Checks which SEO topics are present in the content (including synonyms). Great for verifying content completeness.", {
+server.tool("analyze_coverage", "Analyze the semantic coverage of ad-hoc text against a list of topics/elements. Checks which SEO topics are present in the content (including synonyms). Use this for arbitrary text analysis; for brief-based content analysis, use run_coverage instead.", {
     content: z.string().describe("The text content to analyze"),
     elements: z
         .array(z.string())
         .describe("List of topics/keywords to check for coverage in the text"),
 }, async ({ content, elements }) => {
     return callAPI("/api/brief-advanced/analyze-coverage", { content, elements }, "POST", "body");
+});
+// ─── Tool: import_content ────────────────────────────────────────────────────
+server.tool("import_content", "Import content from a URL into an advanced brief's editor. Fetches the page content and saves it to the brief, like the frontend import feature.", {
+    brief_id: z.string().describe("The ID of the advanced brief to import content into"),
+    url: z.string().describe("The URL to fetch and import content from"),
+}, async ({ brief_id, url }) => {
+    // Step 1: Extract content from the URL (no auth needed)
+    const extractUrl = new URL("/api/extract-content", API_BASE);
+    let extractedContent;
+    try {
+        const extractResponse = await fetch(extractUrl.toString(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+        });
+        if (!extractResponse.ok) {
+            const text = await extractResponse.text();
+            return errorResponse(`Failed to extract content: HTTP ${extractResponse.status}: ${text}`);
+        }
+        const extractJson = await extractResponse.json();
+        extractedContent = extractJson.content;
+        if (!extractedContent) {
+            return errorResponse("No content returned from URL extraction");
+        }
+    }
+    catch (err) {
+        return errorResponse(`Failed to fetch URL content: ${err.message}`);
+    }
+    // Step 2: Save the extracted content to the brief
+    const saveResult = await callAPI(`/api/brief-advanced/${brief_id}/content`, { editor_content: extractedContent }, "PUT", "body");
+    if (saveResult.isError)
+        return saveResult;
+    // Step 3: Return a summary
+    const wordCount = extractedContent.split(/\s+/).filter(Boolean).length;
+    const headingsCount = (extractedContent.match(/<h[1-6][^>]*>/gi) || []).length;
+    return formatResponse({
+        success: true,
+        brief_id,
+        url,
+        word_count: wordCount,
+        headings_count: headingsCount,
+        message: `Successfully imported content from ${url} into brief ${brief_id}`,
+    });
+});
+// ─── Tool: run_coverage ──────────────────────────────────────────────────────
+server.tool("run_coverage", "Run semantic coverage analysis on an advanced brief's content. Analyzes which theme elements from the brief are covered in the editor content. The brief must have content imported first.", {
+    brief_id: z.string().describe("The ID of the advanced brief to run coverage analysis on"),
+}, async ({ brief_id }) => {
+    return callAPI(`/api/brief-advanced/${brief_id}/run-coverage`, {}, "POST", "body");
 });
 // ─── Tool: check_credits ────────────────────────────────────────────────────
 server.tool("check_credits", "Check the user's remaining Semrank credit balance. Use before generating briefs to ensure enough credits are available.", {}, async () => {
