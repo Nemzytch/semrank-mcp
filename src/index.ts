@@ -92,6 +92,13 @@ const TOOL_CATALOG: ToolInfo[] = [
     when_to_use: "When you need to read the actual content, headings, or structure of a specific competitor page from the SERP results of a previously generated brief",
     returns: "{ position, title, link, domain, content, headings, word_count }",
   },
+  {
+    name: "run_basic_analysis",
+    category: "semantic",
+    summary: "Analyze a URL's content against a basic brief's keywords in one shot",
+    when_to_use: "When the user wants to check if a page is semantically optimized for a keyword. Fetches the page, gets the brief's keywords (cached = free), and runs AI analysis. Costs 0.5 credits. This is the PRIMARY tool for checking page optimization against basic briefs.",
+    returns: "{ must_have: [{ keyword, match_type, citation }], interesting: [...], bonus: [...] }",
+  },
 ];
 
 // ─── Server Instructions ─────────────────────────────────────────────────────
@@ -127,17 +134,25 @@ This saves credits and avoids duplicates.
 3. Use generate_advanced_brief with keyword + options (page_type, provider, generation_mode)
 4. The advanced brief includes deeper AI analysis, theme coverage, and structured content plan
 
-### Content Semantic Check (Ad-hoc)
-1. Use analyze_coverage with your text content and a list of topics/keywords to verify
-2. Returns which elements are covered in the text (even via synonyms)
-3. Great for checking if an arbitrary piece of text covers specific SEO topics
+### Check Page Optimization (Basic Brief)
+This is the PREFERRED flow when a user asks to check if a page is well optimized for a keyword:
+1. Use run_basic_analysis with the URL + keyword — it does everything in one call:
+   - Fetches the page content server-side
+   - Gets/generates the basic brief (cached = free)
+   - Runs AI keyword analysis (exact match / broad match / no match)
+2. Costs 0.5 credits. Returns detailed match info per keyword (must_have, interesting, bonus)
+3. NEVER manually fetch page content and send it via analyze_coverage — always use run_basic_analysis
 
-### Content Optimization (Brief-based)
+### Content Optimization (Advanced Brief)
 1. Generate an advanced brief first with generate_advanced_brief
 2. Use import_content to fetch a URL's content into the brief's editor
 3. Use run_coverage to analyze how well the imported content covers the brief's theme elements
 4. This mirrors the frontend workflow: create brief -> import content -> run coverage analysis
-5. Use this flow when optimizing an existing page against an advanced brief
+5. Use this flow for deep theme-based analysis against an advanced brief
+
+### Content Semantic Check (Ad-hoc)
+1. Use analyze_coverage ONLY when you have raw text and a manual list of elements to check
+2. Do NOT use this to check page optimization — use run_basic_analysis or run_coverage instead
 
 ### Browse Past Briefs
 - Use list_basic_briefs to see basic brief history
@@ -221,21 +236,46 @@ function slimBriefResponse(data: unknown): unknown {
   // Slim down organic results: strip full page content and headings
   if (obj.content_brief && typeof obj.content_brief === "object") {
     const brief = obj.content_brief as Record<string, unknown>;
+
+    // Slim organic results: only summary fields
     if (Array.isArray(brief.organic)) {
-      brief.organic = brief.organic.map((r: Record<string, unknown>) => ({
+      brief.organic = brief.organic.slice(0, 10).map((r: Record<string, unknown>) => ({
         position: r.position,
         title: r.title,
         link: r.link,
         domain: r.domain,
         snippet: r.snippet,
         word_count: r.word_count,
-        pageRank: r.pageRank,
       }));
     }
+
+    // Slim relatedSearches to just queries
+    if (Array.isArray(brief.relatedSearches)) {
+      brief.relatedSearches = brief.relatedSearches.slice(0, 10).map(
+        (r: Record<string, unknown>) => r.query || r
+      );
+    }
+
+    // Slim peopleAlsoAsk to just questions
+    if (Array.isArray(brief.peopleAlsoAsk)) {
+      brief.peopleAlsoAsk = brief.peopleAlsoAsk.slice(0, 10).map(
+        (r: Record<string, unknown>) => r.question || r
+      );
+    }
+
+    // Remove heavy/noisy fields
+    delete brief.formatting_guidelines;
+    delete brief.additional_recommendations;
+    delete brief.additional_notes;
   }
 
-  // Remove sources (raw scraped data)
+  // Remove sources and Top_Keywords details (available via brief re-fetch if needed)
   delete obj.sources;
+
+  // Slim Top_Keywords to top 20
+  if (Array.isArray(obj.Top_Keywords)) {
+    obj.Top_Keywords = (obj.Top_Keywords as Array<Record<string, unknown>>).slice(0, 20);
+  }
 
   return obj;
 }
@@ -673,6 +713,89 @@ server.tool(
       "POST",
       "body"
     );
+  }
+);
+
+// ─── Tool: run_basic_analysis ─────────────────────────────────────────────────
+
+server.tool(
+  "run_basic_analysis",
+  "Analyze a URL's content against a basic brief's keywords in one shot. Fetches the page server-side, gets the brief keywords (cached = free), and runs AI analysis (0.5 credits). Returns exact/broad/no match per keyword. This is the PRIMARY tool for checking if a page is optimized for a keyword.",
+  {
+    keyword: z.string().describe("The target keyword to check optimization for"),
+    url: z.string().describe("The URL of the page to analyze"),
+    location: z.string().default("FR").describe("Country code (e.g. FR, US, DE)"),
+    language: z.string().default("fr").describe("Language code (e.g. fr, en, de)"),
+  },
+  async ({ keyword, url, location, language }) => {
+    // Step 1: Fetch page content via extract-content
+    const extractUrl = new URL("/api/extract-content", API_BASE);
+    let pageText: string;
+    try {
+      const extractResponse = await fetch(extractUrl.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      if (!extractResponse.ok) {
+        const text = await extractResponse.text();
+        return errorResponse(`Failed to extract content: HTTP ${extractResponse.status}: ${text}`);
+      }
+      const extractJson = await extractResponse.json() as Record<string, unknown>;
+      const htmlContent = extractJson.content as string;
+      if (!htmlContent) {
+        return errorResponse("No content returned from URL extraction");
+      }
+      // Strip HTML tags to get plain text
+      pageText = htmlContent.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    } catch (err) {
+      return errorResponse(`Failed to fetch URL content: ${(err as Error).message}`);
+    }
+
+    // Step 2: Get brief keywords (cached = free)
+    const briefResult = await callAPI(
+      "/api/brief",
+      { keyword, location, language },
+      "POST",
+      "bearer"
+    );
+    if (briefResult.isError) return briefResult;
+
+    let keywords: Record<string, string[]>;
+    try {
+      const briefData = JSON.parse(briefResult.content[0].text) as Record<string, unknown>;
+      const contentBrief = briefData.content_brief as Record<string, unknown>;
+      const kw = contentBrief?.keywords as Record<string, string[]>;
+      keywords = {
+        must_have: kw?.must_have_keywords || [],
+        interesting: kw?.interesting_keywords || [],
+        bonus: kw?.bonus_keywords || [],
+      };
+    } catch {
+      return errorResponse("Failed to parse brief keywords");
+    }
+
+    // Step 3: Run AI analysis via /api/ai-analyze
+    if (!API_KEY) return errorResponse("SEMRANK_API_KEY is not set.");
+    const analyzeUrl = new URL("/api/ai-analyze", API_BASE);
+    try {
+      const analyzeResponse = await fetch(analyzeUrl.toString(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${API_KEY}`,
+        },
+        body: JSON.stringify({ content: pageText, keywords }),
+      });
+      if (!analyzeResponse.ok) {
+        const text = await analyzeResponse.text();
+        return errorResponse(`AI analysis failed: HTTP ${analyzeResponse.status}: ${text}`);
+      }
+      const analysisResult = await analyzeResponse.json();
+      return formatResponse(analysisResult);
+    } catch (err) {
+      return errorResponse(`AI analysis failed: ${(err as Error).message}`);
+    }
   }
 );
 
