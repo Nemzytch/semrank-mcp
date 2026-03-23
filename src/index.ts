@@ -237,45 +237,17 @@ function slimBriefResponse(data: unknown): unknown {
   if (obj.content_brief && typeof obj.content_brief === "object") {
     const brief = obj.content_brief as Record<string, unknown>;
 
-    // Slim organic results: only summary fields
+    // Strip only the heavy fields: full page content and headings from organic results
     if (Array.isArray(brief.organic)) {
-      brief.organic = brief.organic.slice(0, 10).map((r: Record<string, unknown>) => ({
-        position: r.position,
-        title: r.title,
-        link: r.link,
-        domain: r.domain,
-        snippet: r.snippet,
-        word_count: r.word_count,
-      }));
+      brief.organic = brief.organic.map((r: Record<string, unknown>) => {
+        const { content, headings, ...rest } = r;
+        return rest;
+      });
     }
-
-    // Slim relatedSearches to just queries
-    if (Array.isArray(brief.relatedSearches)) {
-      brief.relatedSearches = brief.relatedSearches.slice(0, 10).map(
-        (r: Record<string, unknown>) => r.query || r
-      );
-    }
-
-    // Slim peopleAlsoAsk to just questions
-    if (Array.isArray(brief.peopleAlsoAsk)) {
-      brief.peopleAlsoAsk = brief.peopleAlsoAsk.slice(0, 10).map(
-        (r: Record<string, unknown>) => r.question || r
-      );
-    }
-
-    // Remove heavy/noisy fields
-    delete brief.formatting_guidelines;
-    delete brief.additional_recommendations;
-    delete brief.additional_notes;
   }
 
-  // Remove sources and Top_Keywords details (available via brief re-fetch if needed)
+  // Remove sources (raw scraped data, very large)
   delete obj.sources;
-
-  // Slim Top_Keywords to top 20
-  if (Array.isArray(obj.Top_Keywords)) {
-    obj.Top_Keywords = (obj.Top_Keywords as Array<Record<string, unknown>>).slice(0, 20);
-  }
 
   return obj;
 }
